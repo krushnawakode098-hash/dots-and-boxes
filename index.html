@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dots and Boxes Pro + Save</title>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --p1-color: #e74c3c;
+            --p2-color: #3498db;
+            --p3-color: #2ecc71;
+            --p4-color: #f1c40f;
+        }
+
+        body {
+            font-family: sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            touch-action: manipulation;
+        }
+
+        #setup-screen, #resume-prompt {
+            background: white;
+            padding: 20px;
+            margin: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            max-width: 90%;
+            text-align: center;
+        }
+
+        #resume-prompt { display: none; }
+
+        .input-group { margin-bottom: 15px; text-align: left; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            background-color: #2c3e50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        #game-screen { display: none; width: 100%; flex-direction: column; align-items: center; }
+        #status-bar { margin: 15px 0; font-size: 1.1rem; font-weight: bold; }
+        #board-container { overflow: auto; max-width: 95vw; max-height: 65vh; border: 2px solid #ddd; background: white; }
+        #game-board { position: relative; margin: 20px; }
+
+        .dot {
+            position: absolute; width: 8px; height: 8px;
+            background-color: #333; border-radius: 50%; z-index: 10;
+            transform: translate(-50%, -50%);
+        }
+
+        .line { position: absolute; background-color: #eee; z-index: 5; transition: 0.2s; cursor: pointer; }
+        .line.taken { cursor: default; }
+        .line.p1 { background-color: var(--p1-color); }
+        .line.p2 { background-color: var(--p2-color); }
+        .line.p3 { background-color: var(--p3-color); }
+        .line.p4 { background-color: var(--p4-color); }
+
+        .box {
+            position: absolute; z-index: 1; display: flex; align-items: center;
+            justify-content: center; font-weight: bold; opacity: 0.7;
+        }
+
+        #scoreboard { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+        .score-pill { padding: 5px 12px; border-radius: 20px; color: white; font-size: 0.9rem; font-weight: bold; }
+        
+        .controls { display: flex; gap: 10px; width: 90%; margin-top: 10px; }
+        .btn-save { background-color: #27ae60; }
+        .btn-reset { background-color: #e67e22; }
+    </style>
+</head>
+<body>
+
+    <div id="resume-prompt">
+        <h3>Saved Game Found!</h3>
+        <p>Would you like to continue your last match?</p>
+        <button onclick="resumeGame()">Yes, Resume</button>
+        <button class="btn-reset" onclick="hideResumePrompt()">No, Start New</button>
+    </div>
+
+    <div id="setup-screen">
+        <h2>Game Settings</h2>
+        <div class="input-group">
+            <label>Players (2-4):</label>
+            <input type="number" id="num-players" value="2" min="2" max="4" oninput="updatePlayerInputs()">
+        </div>
+        <div id="player-initials"></div>
+        <div class="input-group">
+            <label>Grid Size (Width x Height):</label>
+            <div style="display: flex; gap: 5px;">
+                <input type="number" id="grid-w" value="5" min="5" max="20">
+                <input type="number" id="grid-h" value="5" min="5" max="20">
+            </div>
+        </div>
+        <button onclick="startGame()">Start Game</button>
+    </div>
+
+    <div id="game-screen">
+        <div id="status-bar">Player 1's Turn</div>
+        <div id="board-container">
+            <div id="game-board"></div>
+        </div>
+        <div id="scoreboard"></div>
+        <div class="controls">
+            <button class="btn-save" onclick="saveGameToStorage()">Save Game</button>
+            <button class="btn-reset" onclick="confirmReset()">New Game</button>
+        </div>
+    </div>
+
+    <script>
+        let config = { players: [], rows: 5, cols: 5, spacing: 50 };
+        let state = { currentPlayerIdx: 0, lines: {}, scores: [] };
+
+        // Check for existing save on load
+        window.onload = () => {
+            if (localStorage.getItem('dots_save')) {
+                document.getElementById('setup-screen').style.display = 'none';
+                document.getElementById('resume-prompt').style.display = 'block';
+            }
+            updatePlayerInputs();
+        };
+
+        function hideResumePrompt() {
+            document.getElementById('resume-prompt').style.display = 'none';
+            document.getElementById('setup-screen').style.display = 'block';
+        }
+
+        function updatePlayerInputs() {
+            const num = document.getElementById('num-players').value;
+            const pInitialsDiv = document.getElementById('player-initials');
+            pInitialsDiv.innerHTML = '';
+            for(let i=0; i<num; i++) {
+                pInitialsDiv.innerHTML += `
+                    <div class="input-group">
+                        <label>P${i+1} Alphabet:</label>
+                        <input type="text" class="p-char" maxlength="1" value="${String.fromCharCode(65+i)}">
+                    </div>`;
+            }
+        }
+
+        function startGame(loadData = null) {
+            if (loadData) {
+                config = loadData.config;
+                state = loadData.state;
+            } else {
+                config.cols = parseInt(document.getElementById('grid-w').value);
+                config.rows = parseInt(document.getElementById('grid-h').value);
+                const initials = document.querySelectorAll('.p-char');
+                const colors = ['p1', 'p2', 'p3', 'p4'];
+                config.players = [];
+                state.scores = [];
+                state.lines = {};
+                state.currentPlayerIdx = 0;
+
+                initials.forEach((inp, i) => {
+                    config.players.push({ name: `P${i+1}`, char: inp.value.toUpperCase() || '?', colorClass: colors[i] });
+                    state.scores.push(0);
+                });
+            }
+
+            if (config.cols > 10) config.spacing = 45;
+            
+            document.getElementById('setup-screen').style.display = 'none';
+            document.getElementById('resume-prompt').style.display = 'none';
+            document.getElementById('game-screen').style.display = 'flex';
+            
+            renderBoard();
+            if (loadData) restoreLines();
+            updateUI();
+        }
+
+        function renderBoard() {
+            const board = document.getElementById('game-board');
+            board.innerHTML = '';
+            board.style.width = (config.cols - 1) * config.spacing + 'px';
+            board.style.height = (config.rows - 1) * config.spacing + 'px';
+
+            for (let r = 0; r < config.rows; r++) {
+                for (let c = 0; c < config.cols; c++) {
+                    const dot = document.createElement('div');
+                    dot.className = 'dot';
+                    dot.style.top = (r * config.spacing) + 'px';
+                    dot.style.left = (c * config.spacing) + 'px';
+                    board.appendChild(dot);
+                    
+                    if (c < config.cols - 1) createLine(r, c, 'h');
+                    if (r < config.rows - 1) createLine(r, c, 'v');
+                }
+            }
+        }
+
+        function createLine(r, c, type) {
+            const line = document.createElement('div');
+            line.className = 'line';
+            const id = `${type}-${r}-${c}`;
+            line.id = id;
+            const isH = type === 'h';
+            
+            line.style.width = isH ? config.spacing + 'px' : '12px';
+            line.style.height = isH ? '12px' : config.spacing + 'px';
+            line.style.top = (r * config.spacing - (isH ? 6 : 0)) + 'px';
+            line.style.left = (c * config.spacing - (isH ? 0 : 6)) + 'px';
+
+            line.onclick = () => handleMove(id);
+            document.getElementById('game-board').appendChild(line);
+        }
+
+        function handleMove(id) {
+            if (state.lines[id] !== undefined) return;
+            
+            state.lines[id] = state.currentPlayerIdx;
+            const el = document.getElementById(id);
+            el.classList.add('taken', config.players[state.currentPlayerIdx].colorClass);
+
+            const boxesWon = checkBoxes();
+            if (boxesWon > 0) {
+                state.scores[state.currentPlayerIdx] += boxesWon;
+            } else {
+                state.currentPlayerIdx = (state.currentPlayerIdx + 1) % config.players.length;
+            }
+            updateUI();
+            saveGameToStorage(); // Auto-save after every move
+        }
+
+        function checkBoxes() {
+            let count = 0;
+            for (let r = 0; r < config.rows - 1; r++) {
+                for (let c = 0; c < config.cols - 1; c++) {
+                    const bId = `box-${r}-${c}`;
+                    if (document.getElementById(bId)) continue;
+                    const top = `h-${r}-${c}`, bot = `h-${r+1}-${c}`, L = `v-${r}-${c}`, R = `v-${r}-${c+1}`;
+                    if (state.lines[top]!==undefined && state.lines[bot]!==undefined && state.lines[L]!==undefined && state.lines[R]!==undefined) {
+                        createBoxUI(r, c, bId, config.players[state.currentPlayerIdx]);
+                        count++;
+                    }
+                }
+            }
+            return count;
+        }
+
+        function createBoxUI(r, c, id, player) {
+            const box = document.createElement('div');
+            box.id = id;
+            box.className = `box filled ${player.colorClass}`;
+            box.style.width = config.spacing + 'px';
+            box.style.height = config.spacing + 'px';
+            box.style.top = (r * config.spacing) + 'px';
+            box.style.left = (c * config.spacing) + 'px';
+            box.style.fontSize = (config.spacing * 0.5) + 'px';
+            box.innerText = player.char;
+            document.getElementById('game-board').appendChild(box);
+        }
+
+        function restoreLines() {
+            for (let id in state.lines) {
+                const pIdx = state.lines[id];
+                const el = document.getElementById(id);
+                if (el) el.classList.add('taken', config.players[pIdx].colorClass);
+            }
+            // Re-draw all captured boxes
+            for (let r = 0; r < config.rows - 1; r++) {
+                for (let c = 0; c < config.cols - 1; c++) {
+                    const top = `h-${r}-${c}`, bot = `h-${r+1}-${c}`, L = `v-${r}-${c}`, R = `v-${r}-${c+1}`;
+                    if (state.lines[top]!==undefined && state.lines[bot]!==undefined && state.lines[L]!==undefined && state.lines[R]!==undefined) {
+                        // We need to know who finished the box. In this logic, the line owner of the LAST line drawn usually gets it.
+                        // For simplicity in resume, we just check who should have it.
+                        const lastLineOwnerIdx = state.lines[top]; // Simplified
+                        createBoxUI(r, c, `box-${r}-${c}`, config.players[lastLineOwnerIdx]);
+                    }
+                }
+            }
+        }
+
+        function updateUI() {
+            const p = config.players[state.currentPlayerIdx];
+            const bar = document.getElementById('status-bar');
+            bar.innerText = `${p.name}'s Turn (${p.char})`;
+            bar.style.color = `var(--${p.colorClass}-color)`;
+            
+            const sb = document.getElementById('scoreboard');
+            sb.innerHTML = '';
+            config.players.forEach((p, i) => {
+                sb.innerHTML += `<div class="score-pill ${p.colorClass}">${p.char}: ${state.scores[i]}</div>`;
+            });
+        }
+
+        function saveGameToStorage() {
+            const data = { config, state };
+            localStorage.setItem('dots_save', JSON.stringify(data));
+        }
+
+        function resumeGame() {
+            const data = JSON.parse(localStorage.getItem('dots_save'));
+            startGame(data);
+        }
+
+        function confirmReset() {
+            if (confirm("Start a new game? Current progress will be lost.")) {
+                localStorage.removeItem('dots_save');
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>
